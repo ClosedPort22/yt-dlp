@@ -68,6 +68,9 @@ class FragmentFD(FileDownloader):
         err = f' {err};' if err else ''
         self.to_screen(f'[download]{err} Skipping fragment {frag_index:d} ...')
 
+    def report_unable_to_resume(self):
+        self.to_screen('[download] Unable to resume partially downloaded fragment')
+
     def _prepare_url(self, info_dict, url):
         headers = info_dict.get('http_headers')
         return Request(url, None, headers) if headers else url
@@ -110,15 +113,21 @@ class FragmentFD(FileDownloader):
 
     def _download_fragment(self, ctx, frag_url, info_dict, headers=None, request_data=None):
         fragment_filename = '%s-Frag%d' % (ctx['tmpfilename'], ctx['fragment_index'])
+        dl_opts = info_dict.get('downloader_options') or {}
         fragment_info_dict = {
             'url': frag_url,
             'http_headers': headers or info_dict.get('http_headers'),
             'request_data': request_data,
+            'downloader_options': dl_opts,
             'ctx_id': ctx.get('ctx_id'),
         }
         frag_resume_len = 0
         if ctx['dl'].params.get('continuedl', True):
             frag_resume_len = self.filesize_or_none(self.temp_name(fragment_filename))
+            if frag_resume_len and not dl_opts.get('continuedl', True):
+                # report here because ctx['dl'] is silenced
+                self.report_unable_to_resume()
+                frag_resume_len = 0
         fragment_info_dict['frag_resume_len'] = ctx['frag_resume_len'] = frag_resume_len
 
         success, _ = ctx['dl'].download(fragment_filename, fragment_info_dict)

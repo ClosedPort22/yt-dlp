@@ -78,10 +78,12 @@ class HlsFD(FragmentFD):
         man_url = urlh.url
         s = urlh.read().decode('utf-8', 'ignore')
 
+        has_aes128 = '#EXT-X-KEY:METHOD=AES-128' in s
+
         can_download, message = self.can_download(s, info_dict, self.params.get('allow_unplayable_formats')), None
         if can_download:
             has_ffmpeg = FFmpegFD.available()
-            no_crypto = not Cryptodome.AES and '#EXT-X-KEY:METHOD=AES-128' in s
+            no_crypto = not Cryptodome.AES and has_aes128
             if no_crypto and has_ffmpeg:
                 can_download, message = False, 'The stream has AES-128 encryption and pycryptodomex is not available'
             elif no_crypto:
@@ -104,8 +106,19 @@ class HlsFD(FragmentFD):
             fd = FFmpegFD(self.ydl, self.params)
             self.report_warning(f'{message}; extraction will be delegated to {fd.get_basename()}')
             return fd.real_download(filename, info_dict)
-        elif message:
-            self.report_warning(message)
+        else:
+            if message:
+                self.report_warning(message)
+
+            if has_aes128 and not isinstance(traverse_obj(info_dict, ('downloader_options', 'continuedl')), bool):
+                # set 'continuedl' to True in info extractor explicitly to enable resuming
+                # set to False to suppress this message
+                self.report_warning('This stream has AES-128 encryption. Resuming fragment download '
+                                    'will be disabled as it may cause data corruption.')
+                try:
+                    info_dict['downloader_options']['continuedl'] = False
+                except (KeyError, TypeError):
+                    info_dict['downloader_options'] = {'continuedl': False}
 
         is_webvtt = info_dict['ext'] == 'vtt'
         if is_webvtt:

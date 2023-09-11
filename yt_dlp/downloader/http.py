@@ -18,6 +18,7 @@ from ..utils import (
     encodeFilename,
     int_or_none,
     parse_http_range,
+    traverse_obj,
     try_call,
     write_xattr,
 )
@@ -56,11 +57,17 @@ class HttpFD(FileDownloader):
         # parse given Range
         req_start, req_end, _ = parse_http_range(headers.get('Range'))
 
+        # set this to False if the server supports resuming but we're unable to use it
+        should_resume = traverse_obj(info_dict, ('downloader_options', 'continuedl'), default=True)
+
         if self.params.get('continuedl', True):
             # Establish possible resume length
             if os.path.isfile(encodeFilename(ctx.tmpfilename)):
-                ctx.resume_len = os.path.getsize(
-                    encodeFilename(ctx.tmpfilename))
+                if should_resume:
+                    ctx.resume_len = os.path.getsize(
+                        encodeFilename(ctx.tmpfilename))
+                else:
+                    self.report_unable_to_resume()
 
         ctx.is_resume = ctx.resume_len > 0
 
@@ -235,11 +242,19 @@ class HttpFD(FileDownloader):
             now = None  # needed for slow_down() in the first loop run
             before = start  # start measuring
 
-            def retry(e):
-                close_stream()
-                ctx.resume_len = (byte_counter if ctx.tmpfilename == '-'
-                                  else os.path.getsize(encodeFilename(ctx.tmpfilename)))
-                raise RetryDownload(e)
+            if should_resume:
+                def retry(e):
+                    close_stream()
+                    ctx.resume_len = (byte_counter if ctx.tmpfilename == '-'
+                                      else os.path.getsize(encodeFilename(ctx.tmpfilename)))
+                    raise RetryDownload(e)
+            else:
+                def retry(e):
+                    close_stream()
+                    ctx.resume_len = 0
+                    ctx.open_mode = 'wb'
+                    self.report_unable_to_resume()
+                    raise RetryDownload(e)
 
             while True:
                 try:
