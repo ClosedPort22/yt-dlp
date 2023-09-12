@@ -51,6 +51,7 @@ class HttpFD(FileDownloader):
 
         ctx.open_mode = 'wb'
         ctx.resume_len = 0
+        ctx.expected_len = None
         ctx.block_size = self.params.get('buffersize', 1024)
         ctx.start_time = time.time()
 
@@ -110,15 +111,18 @@ class HttpFD(FileDownloader):
             else:
                 range_end = None
 
-            if try_call(lambda: range_start > range_end):
+            def retry_from_scratch(e):
                 ctx.resume_len = 0
                 ctx.open_mode = 'wb'
-                raise RetryDownload(Exception(f'Conflicting range. (start={range_start} > end={range_end})'))
+                raise RetryDownload(e)
+
+            if try_call(lambda: range_start > range_end):
+                retry_from_scratch(Exception(f'Conflicting range. (start={range_start} > end={range_end})'))
 
             if try_call(lambda: range_end >= ctx.content_len):
                 range_end = ctx.content_len - 1
 
-            request = Request(url, request_data, headers)
+            request = Request(url, request_data, headers.copy())
             has_range = range_start is not None
             if has_range:
                 request.headers['Range'] = f'bytes={int(range_start)}-{int_or_none(range_end) or ""}'
@@ -132,7 +136,22 @@ class HttpFD(FileDownloader):
                 # https://github.com/ytdl-org/youtube-dl/issues/6057#issuecomment-126129799)
                 if has_range:
                     content_range = ctx.data.headers.get('Content-Range')
+                    if not content_range and ctx.data.status != 200:
+                        # Content-Range is mandatory for 206 responses, so this should never happen
+                        retry_from_scratch(Exception('No Content-Range header'))
                     content_range_start, content_range_end, content_len = parse_http_range(content_range)
+
+                    # total length must not change between retries (https://github.com/yt-dlp/yt-dlp/issues/3810)
+                    if ctx.expected_len:
+                        # subsequent tries
+                        if content_len and ctx.expected_len != content_len:
+                            # invalid total length
+                            retry_from_scratch(Exception(f'Invalid Content-Range header: total length mismatch, '
+                                                         f'expected {ctx.expected_len}, got {content_len}'))
+                    elif content_len:
+                        # first try
+                        ctx.expected_len = content_len
+
                     # Content-Range is present and matches requested Range, resume is possible
                     if range_start == content_range_start and (
                             # Non-chunked download
@@ -152,7 +171,8 @@ class HttpFD(FileDownloader):
                         self.report_unable_to_resume()
                     ctx.resume_len = 0
                     ctx.open_mode = 'wb'
-                ctx.data_len = ctx.content_len = int_or_none(ctx.data.headers.get('Content-length', None))
+                # normal 200 response
+                ctx.data_len = ctx.content_len = ctx.expected_len = int_or_none(ctx.data.headers.get('Content-length', None))
             except HTTPError as err:
                 if err.status == 416:
                     # Unable to resume (requested range not satisfiable)
