@@ -307,6 +307,11 @@ class Aria2cFD(ExternalFD):
         if info_dict.get('http_headers') is not None:
             for key, val in info_dict['http_headers'].items():
                 cmd += ['--header', f'{key}: {val}']
+        if not traverse_obj(info_dict, ('downloader_options', 'continuedl'), default=True):
+            # '--always-resume=false': download from scratch instead of aborting
+            # 'Range: ': prevents the Range header from being sent; this will
+            #  cause content length mismatch and aria2c will then start the download all over
+            cmd += ['--always-resume=false', '--header', 'Range: ']
         cmd += self._option('--max-overall-download-limit', 'ratelimit')
         cmd += self._option('--interface', 'source_address')
         cmd += self._option('--all-proxy', 'proxy')
