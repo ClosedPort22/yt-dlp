@@ -25,24 +25,29 @@ TEST_SIZE = 10 * 1024
 
 
 class HTTPTestRequestHandler(http.server.BaseHTTPRequestHandler):
+    # simulate network error only once
+    _INJECTED = False
+
     def log_message(self, format, *args):
         pass
 
-    def send_content_range(self, total=None):
+    def send_content_range(self, total):
+        """
+        Send `Content-Range` header according to the `Range` header in the request.
+        Do nothing if `Range` is not present.
+
+        @returns Value of `Content-Length` header
+        """
         range_header = self.headers.get('Range')
-        start = end = None
-        if range_header:
-            mobj = re.search(r'^bytes=(\d+)-(\d+)', range_header)
-            if mobj:
-                start = int(mobj.group(1))
-                end = int(mobj.group(2))
-        valid_range = start is not None and end is not None
-        if valid_range:
-            content_range = 'bytes %d-%d' % (start, end)
-            if total:
-                content_range += '/%d' % total
-            self.send_header('Content-Range', content_range)
-        return (end - start + 1) if valid_range else total
+        if not range_header:
+            return total
+        mobj = re.match(r'bytes=(?:(\d+)-(\d+)$|(\d+)-$)', range_header)
+        if not mobj:
+            return total
+        start = int(mobj.group(1) or mobj.group(3))
+        end = int(mobj.group(2) or (total - 1))
+        self.send_header('Content-Range', f'bytes {start}-{end}/{total}')
+        return (end - start + 1)
 
     def serve(self, range=True, content_length=True):
         self.send_response(200)
@@ -55,6 +60,23 @@ class HTTPTestRequestHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'#' * size)
 
+    def serve_too_short(self, actual_size):
+        """Simulate broken connection"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'video/mp4')
+        self.send_header('Content-Length', TEST_SIZE)
+        self.end_headers()
+        self.wfile.write(b'#' * actual_size)
+
+    def serve_range(self, total=TEST_SIZE):
+        assert 'Range' in self.headers
+        self.send_response(206)
+        self.send_header('Content-Type', 'video/mp4')
+        size = self.send_content_range(total)
+        self.send_header('Content-Length', size)
+        self.end_headers()
+        self.wfile.write(b'#' * size)
+
     def do_GET(self):
         if self.path == '/regular':
             self.serve()
@@ -64,6 +86,22 @@ class HTTPTestRequestHandler(http.server.BaseHTTPRequestHandler):
             self.serve(range=False)
         elif self.path == '/no-range-no-content-length':
             self.serve(range=False, content_length=False)
+        elif self.path == '/resume':
+            if 'Range' in self.headers:
+                self.serve_range()
+            else:
+                # simulate network error
+                self.serve_too_short(actual_size=1024)
+        elif self.path == '/resume-length-mismatch':
+            if 'Range' in self.headers:
+                self.serve_range(total=8 * 1024)
+            elif HTTPTestRequestHandler._INJECTED:
+                # normal response
+                self.serve()
+            else:
+                # simulate network error
+                self.serve_too_short(actual_size=1024)
+                HTTPTestRequestHandler._INJECTED = True
         else:
             assert False
 
@@ -100,6 +138,12 @@ class TestHttpFD(unittest.TestCase):
         self.download_all({
             'http_chunk_size': 1000,
         })
+
+    def test_resume(self):
+        self.download({'retries': 1}, 'resume')
+
+    def test_resume_length_mismatch(self):
+        self.download({'retries': 2}, 'resume-length-mismatch')
 
 
 if __name__ == '__main__':
