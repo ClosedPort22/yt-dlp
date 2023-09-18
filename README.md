@@ -1865,6 +1865,9 @@ The following extractors use this feature:
 #### nhkradirulive (NHK らじる★らじる LIVE)
 * `area`: Which regional variation to extract. Valid areas are: `sapporo`, `sendai`, `tokyo`, `nagoya`, `osaka`, `hiroshima`, `matsuyama`, `fukuoka`. Defaults to `tokyo`
 
+#### bilibili
+* `include_duplicate_formats`: Include formats with identical content but different URLs or video hosts
+
 **Note**: These options may be changed/removed in the future without concern for backward compatibility
 
 <!-- MANPAGE: MOVE "INSTALLATION" SECTION HERE -->

@@ -42,6 +42,34 @@ class BilibiliBaseIE(InfoExtractor):
     _FORMAT_ID_RE = re.compile(r'-(\d+)\.m4s\?')
 
     def extract_formats(self, play_info):
+        def get_urls(obj):
+            # prioritize non-mcdn URLs
+            urls = traverse_obj(obj, ('backupUrl', ...), ('backup_url', ...))
+            # may be mcdn
+            urls.append(traverse_obj(obj, 'baseUrl', 'base_url', 'url'))
+            return urls
+
+        if self._configuration_arg('include_duplicate_formats'):
+            # include ALL backup URLs and possible mcdn URLs
+            def yield_formats(urls, format_id, base_dict):
+                for url in urls:
+                    cdn = self._search_regex(r'^https?://(.+?)\.bilivideo', url, 'video host', fatal=False)
+                    dct = {
+                        'url': url,
+                        'format_id': f'{format_id}-{cdn}',
+                    }
+                    dct.update(base_dict)
+                    yield dct
+        else:
+            # select the first backup URL
+            def yield_formats(urls, format_id, base_dict):
+                dct = {
+                    'url': urls[0],
+                    'format_id': format_id,
+                }
+                dct.update(base_dict)
+                yield dct
+
         format_names = {
             r['quality']: traverse_obj(r, 'new_description', 'display_desc')
             for r in traverse_obj(play_info, ('support_formats', lambda _, v: v['quality']))
@@ -51,32 +79,39 @@ class BilibiliBaseIE(InfoExtractor):
         flac_audio = traverse_obj(play_info, ('dash', 'flac', 'audio'))
         if flac_audio:
             audios.append(flac_audio)
-        formats = [{
-            'url': traverse_obj(audio, 'baseUrl', 'base_url', 'url'),
-            'ext': mimetype2ext(traverse_obj(audio, 'mimeType', 'mime_type')),
-            'acodec': audio.get('codecs'),
-            'vcodec': 'none',
-            'tbr': float_or_none(audio.get('bandwidth'), scale=1000),
-            'filesize': int_or_none(audio.get('size')),
-            'format_id': str_or_none(audio.get('id')),
-        } for audio in audios]
 
-        formats.extend({
-            'url': traverse_obj(video, 'baseUrl', 'base_url', 'url'),
-            'ext': mimetype2ext(traverse_obj(video, 'mimeType', 'mime_type')),
-            'fps': float_or_none(traverse_obj(video, 'frameRate', 'frame_rate')),
-            'width': int_or_none(video.get('width')),
-            'height': int_or_none(video.get('height')),
-            'vcodec': video.get('codecs'),
-            'acodec': 'none' if audios else None,
-            'tbr': float_or_none(video.get('bandwidth'), scale=1000),
-            'filesize': int_or_none(video.get('size')),
-            'quality': int_or_none(video.get('id')),
-            'format_id': traverse_obj(
+        formats = []
+
+        for audio in audios:
+            urls = get_urls(audio)
+            format_id = str_or_none(audio.get('id'))
+            base_dict = {
+                'ext': mimetype2ext(traverse_obj(audio, 'mimeType', 'mime_type')),
+                'acodec': audio.get('codecs'),
+                'vcodec': 'none',
+                'tbr': float_or_none(audio.get('bandwidth'), scale=1000),
+                'filesize': int_or_none(audio.get('size')),
+            }
+            formats.extend(yield_formats(urls, format_id, base_dict))
+
+        for video in traverse_obj(play_info, ('dash', 'video', ...)):
+            urls = get_urls(video)
+            format_id = traverse_obj(
                 video, (('baseUrl', 'base_url'), {self._FORMAT_ID_RE.search}, 1),
-                ('id', {str_or_none}), get_all=False),
-            'format': format_names.get(video.get('id')),
-        } for video in traverse_obj(play_info, ('dash', 'video', ...)))
+                ('id', {str_or_none}), get_all=False)
+            base_dict = {
+                'ext': mimetype2ext(traverse_obj(video, 'mimeType', 'mime_type')),
+                'fps': float_or_none(traverse_obj(video, 'frameRate', 'frame_rate')),
+                'width': int_or_none(video.get('width')),
+                'height': int_or_none(video.get('height')),
+                'vcodec': video.get('codecs'),
+                'acodec': 'none' if audios else None,
+                'tbr': float_or_none(video.get('bandwidth'), scale=1000),
+                'filesize': int_or_none(video.get('size')),
+                'quality': int_or_none(video.get('id')),
+                'format': format_names.get(video.get('id')),
+            }
+            formats.extend(yield_formats(urls, format_id, base_dict))
 
         missing_formats = format_names.keys() - set(traverse_obj(formats, (..., 'quality')))
         if missing_formats:
@@ -340,6 +375,30 @@ class BiliBiliIE(BilibiliBaseIE):
             'thumbnail': r're:^https?://.*\.(jpg|jpeg|png)$',
         },
         'params': {'skip_download': True},
+    }, {
+        'note': 'include duplicate formats',
+        'url': 'https://www.bilibili.com/video/av127',
+        'info_dict': {
+            'id': 'BV1xx411c72d',
+            'ext': 'mp4',
+            'title': '永夜抄OP',
+            'timestamp': 1247619636,
+            'description': 'md5:4906cf9f297d34d7cd86c806a64c5241',
+            'duration': 104.209,
+            'upload_date': '20090715',
+            'formats': 'mincount:4',
+            'tags': list,
+            'uploader': 'PAD长的小刀',
+            'uploader_id': '51',
+            'comment_count': int,
+            'view_count': int,
+            'like_count': int,
+            'thumbnail': r're:^https?://.*\.(jpg|jpeg|png)$',
+        },
+        'params': {
+            'skip_download': True,
+            'extractor_args': {'bilibili': {'include_duplicate_formats': ['']}}
+        },
     }]
 
     def _real_extract(self, url):
