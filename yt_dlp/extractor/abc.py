@@ -2,10 +2,12 @@ import hashlib
 import hmac
 import re
 import time
+import datetime as dt
 
 from .common import InfoExtractor
 from ..compat import compat_str
 from ..utils import (
+    datetime_from_str,
     dict_get,
     ExtractorError,
     js_to_json,
@@ -285,9 +287,54 @@ class ABCIViewIE(InfoExtractor):
         video_params = self._download_json(
             'https://iview.abc.net.au/api/programs/' + video_id, video_id)
         title = unescapeHTML(video_params.get('title') or video_params['seriesTitle'])
+        house_number = video_params.get('episodeHouseNumber') or video_id
+        # XXX: this doesn't take DST into account
+        pub_date = parse_iso8601(video_params.get('pubDate'), ' ', timezone=dt.timedelta(hours=10))
+
+        info = {
+            'id': video_id,
+            'title': title,
+            'description': video_params.get('description'),
+            'thumbnail': video_params.get('thumbnail'),
+            'duration': int_or_none(video_params.get('eventDuration')),
+            'timestamp': pub_date,
+            'series': unescapeHTML(video_params.get('seriesTitle')),
+            'series_id': video_params.get('seriesHouseNumber') or video_id[:7],
+            'season_number': int_or_none(self._search_regex(
+                r'\bSeries\s+(\d+)\b', title, 'season number', default=None)),
+            'episode_number': int_or_none(self._search_regex(
+                r'\bEp\s+(\d+)\b', title, 'episode number', default=None)),
+            'episode_id': house_number,
+            'episode': self._search_regex(
+                r'^(?:Series\s+\d+)?\s*(?:Ep\s+\d+)?\s*(.*)$', title, 'episode', default='') or None,
+            'uploader_id': video_params.get('channel'),
+            'is_live': video_params.get('livestream') == '1',
+        }
+
+        if 'playlist' not in video_params:
+            msg = video_params.get("statusMessage") or ''
+            if 'Some ABC iview programs are now available outside Australia' in msg:
+                self.raise_geo_restricted(countries=self._GEO_COUNTRIES)
+
+            if availability := video_params.get('availability') or '':
+                self.raise_no_formats(availability, expected=True, video_id=house_number)
+
+            if mobj := re.search(r'will be published in\s*([0-9a-zA-Z ]+)\.?', availability):
+                if pub_date:
+                    release_timestamp = pub_date
+                else:
+                    # try and parse inexact release date in case pubDate is unavailable
+                    try:
+                        release_timestamp = int(datetime_from_str('now+' + mobj.group(1).replace(' ', '')).timestamp())
+                    except ValueError:
+                        release_timestamp = None
+                info['release_timestamp'] = release_timestamp
+                return info
+
+            raise ExtractorError(f'iview says: {msg or availability}', expected=bool(msg))
+
         stream = next(s for s in video_params['playlist'] if s.get('type') in ('program', 'livestream'))
 
-        house_number = video_params.get('episodeHouseNumber') or video_id
         path = '/auth/hls/sign?ts={0}&hn={1}&d=android-tablet'.format(
             int(time.time()), house_number)
         sig = hmac.new(
@@ -320,29 +367,11 @@ class ABCIViewIE(InfoExtractor):
                 'ext': 'vtt',
             }]
 
-        is_live = video_params.get('livestream') == '1'
-
-        return {
-            'id': video_id,
-            'title': title,
-            'description': video_params.get('description'),
-            'thumbnail': video_params.get('thumbnail'),
-            'duration': int_or_none(video_params.get('eventDuration')),
-            'timestamp': parse_iso8601(video_params.get('pubDate'), ' '),
-            'series': unescapeHTML(video_params.get('seriesTitle')),
-            'series_id': video_params.get('seriesHouseNumber') or video_id[:7],
-            'season_number': int_or_none(self._search_regex(
-                r'\bSeries\s+(\d+)\b', title, 'season number', default=None)),
-            'episode_number': int_or_none(self._search_regex(
-                r'\bEp\s+(\d+)\b', title, 'episode number', default=None)),
-            'episode_id': house_number,
-            'episode': self._search_regex(
-                r'^(?:Series\s+\d+)?\s*(?:Ep\s+\d+)?\s*(.*)$', title, 'episode', default='') or None,
-            'uploader_id': video_params.get('channel'),
+        info.update({
             'formats': formats,
             'subtitles': subtitles,
-            'is_live': is_live,
-        }
+        })
+        return info
 
 
 class ABCIViewShowSeriesIE(InfoExtractor):
