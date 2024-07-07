@@ -3336,9 +3336,9 @@ def parse_dfxp_time_expr(time_expr):
     if mobj:
         return float(mobj.group('time_offset'))
 
-    mobj = re.match(r'^(\d+):(\d\d):(\d\d(?:(?:\.|:)\d+)?)$', time_expr)
+    mobj = re.match(r'^(?:(\d+):)?(\d{1,2}):(\d\d(?:(?:\.|:)\d+)?)$', time_expr)
     if mobj:
-        return 3600 * int(mobj.group(1)) + 60 * int(mobj.group(2)) + float(mobj.group(3).replace(':', '.'))
+        return 3600 * int(mobj.group(1) or 0) + 60 * int(mobj.group(2)) + float(mobj.group(3).replace(':', '.'))
 
 
 def srt_subtitles_timecode(seconds):
