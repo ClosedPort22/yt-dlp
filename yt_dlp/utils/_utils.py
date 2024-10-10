@@ -4632,7 +4632,8 @@ def clean_podcast_url(url):
                 media\.blubrry\.com| # https://create.blubrry.com/resources/podcast-media-download-statistics/getting-started/
                 play\.podtrac\.com|
                 chrt\.fm/track|
-                mgln\.ai/e
+                mgln\.ai/e|
+                p\.podderapp\.com # https://www.podderapp.com/post/how-to-install-podders-prefix-prepend
             )(?:/[^/.]+)?|
             (?:dts|www)\.podtrac\.com/(?:pts/)?redirect\.[0-9a-z]{3,4}| # http://analytics.podtrac.com/how-to-measure
             flex\.acast\.com|
